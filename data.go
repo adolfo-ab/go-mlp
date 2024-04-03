@@ -30,27 +30,29 @@ func loadData() ([][]string, error) {
 
 func parseData(data [][]string) ([][]float64, error) {
 	parsedData := make([][]float64, len(data))
+	speciesMap := map[string]float64{
+		"Iris-setosa":     1.0,
+		"Iris-versicolor": 2.0,
+		"Iris-virginica":  3.0,
+	}
 
 	for i, row := range data {
 		parsedRow := make([]float64, len(row))
-		for j := 0; j < len(row)-1; j++ {
-			val, err := strconv.ParseFloat(row[j], 64)
-			if err != nil {
-				return nil, err
+		for j := range row {
+			if j == len(row)-1 {
+				species := row[j]
+				if val, ok := speciesMap[species]; ok {
+					parsedRow[j] = val
+				} else {
+					return nil, fmt.Errorf("unknown species: %s", species)
+				}
+			} else {
+				val, err := strconv.ParseFloat(row[j], 64)
+				if err != nil {
+					return nil, err
+				}
+				parsedRow[j] = val
 			}
-			parsedRow[j] = val
-		}
-		species := row[len(row)-1]
-
-		switch species {
-		case "Iris-setosa":
-			parsedRow[len(row)-1] = 1.0
-		case "Iris-versicolor":
-			parsedRow[len(row)-1] = 2.0
-		case "Iris-virginica":
-			parsedRow[len(row)-1] = 3.0
-		default:
-			return nil, fmt.Errorf("unknown species: %s", species)
 		}
 		parsedData[i] = parsedRow
 	}
