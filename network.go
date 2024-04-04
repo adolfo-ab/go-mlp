@@ -3,6 +3,8 @@ package main
 import (
 	"gonum.org/v1/gonum/mat"
 	"math"
+	"math/rand"
+	"time"
 )
 
 type NeuralNetwork struct {
@@ -22,7 +24,28 @@ type NeuralNetworkConfig struct {
 }
 
 func NewNeuralNetwork(config NeuralNetworkConfig) *NeuralNetwork {
-	return &NeuralNetwork{config: config}
+	nn := &NeuralNetwork{config: config}
+	nn.wHidden = mat.NewDense(config.numInputNeurons, config.numHiddenNeurons, nil)
+	nn.bHidden = mat.NewDense(1, config.numHiddenNeurons, nil)
+	nn.wOutput = mat.NewDense(config.numHiddenNeurons, config.numOutputNeurons, nil)
+	nn.bOutput = mat.NewDense(1, config.numOutputNeurons, nil)
+	nn.initializeWeightsAndBiases()
+	return nn
+}
+
+func (nn *NeuralNetwork) initializeWeightsAndBiases() {
+	randSource := rand.NewSource(time.Now().UnixNano())
+	randGen := rand.New(randSource)
+
+	wHiddenRaw := nn.wHidden.RawMatrix().Data
+	bHiddenRaw := nn.bHidden.RawMatrix().Data
+	wOutputRaw := nn.wOutput.RawMatrix().Data
+	bOutputRaw := nn.bOutput.RawMatrix().Data
+	for _, value := range [][]float64{wHiddenRaw, bHiddenRaw, wOutputRaw, bOutputRaw} {
+		for i := range value {
+			value[i] = randGen.Float64()
+		}
+	}
 }
 
 func relu(x float64) float64 {
