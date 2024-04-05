@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/csv"
+	"gonum.org/v1/gonum/mat"
 	"math/rand"
 	"os"
 	"strconv"
@@ -63,11 +64,29 @@ func parseData(data [][]string) ([][]float64, [][]float64, error) {
 	return features, labels, nil
 }
 
-func splitData(features [][]float64, labels [][]float64) ([][]float64, [][]float64, [][]float64, [][]float64) {
+func splitData(features [][]float64, labels [][]float64) (*mat.Dense, *mat.Dense, *mat.Dense, *mat.Dense) {
 	// Split into training and testing sets
 	splitIndex := int(float64(len(features)) * trainSize)
 	trainFeatures, testFeatures := features[:splitIndex], features[splitIndex:]
 	trainLabels, testLabels := labels[:splitIndex], labels[splitIndex:]
 
-	return trainFeatures, trainLabels, testFeatures, testLabels
+	return sliceToDense(trainFeatures), sliceToDense(trainLabels), sliceToDense(testFeatures), sliceToDense(testLabels)
+}
+
+func sliceToDense(data [][]float64) *mat.Dense {
+	var total int
+	rows := len(data)
+	cols := 0
+	if rows > 0 {
+		cols = len(data[0])
+		total = rows * cols
+	}
+
+	flat := make([]float64, 0, total)
+
+	for _, row := range data {
+		flat = append(flat, row...)
+	}
+
+	return mat.NewDense(rows, cols, flat)
 }

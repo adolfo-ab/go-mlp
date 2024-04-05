@@ -72,3 +72,48 @@ func softmax(x []float64) []float64 {
 	}
 	return out
 }
+
+func (nn *NeuralNetwork) forwardPass(input *mat.Dense) (*mat.Dense, error) {
+	// Compute the input to the hidden layer
+	hiddenInput := mat.NewDense(input.RawMatrix().Rows, nn.config.numHiddenNeurons, nil)
+	hiddenInput.Mul(input, nn.wHidden)
+	hiddenInput.Add(hiddenInput, nn.bHidden)
+
+	// Apply the ReLU activation function to the output of the hidden layer
+	hiddenOutput := mat.NewDense(hiddenInput.RawMatrix().Rows, nn.config.numHiddenNeurons, nil)
+	applyFunc(hiddenInput, hiddenOutput, relu)
+
+	// Compute the input to the output layer
+	finalInput := mat.NewDense(hiddenOutput.RawMatrix().Rows, nn.config.numOutputNeurons, nil)
+	finalInput.Mul(hiddenOutput, nn.wOutput)
+	finalInput.Add(finalInput, nn.bOutput)
+
+	// Apply the softmax activation function to the output of the output layer
+	finalOutput := applySoftmaxToDense(finalInput)
+
+	return finalOutput, nil
+}
+
+func applySoftmaxToDense(input *mat.Dense) *mat.Dense {
+	r, c := input.Dims()
+	output := mat.NewDense(r, c, nil)
+
+	for i := 0; i < r; i++ {
+		row := mat.Row(nil, i, input)
+		softmaxRow := softmax(row)
+		for j, prob := range softmaxRow {
+			output.Set(i, j, prob)
+		}
+	}
+
+	return output
+}
+
+func applyFunc(input, output *mat.Dense, f func(float64) float64) {
+	r, c := input.Dims()
+	for i := 0; i < r; i++ {
+		for j := 0; j < c; j++ {
+			output.Set(i, j, f(input.At(i, j)))
+		}
+	}
+}
