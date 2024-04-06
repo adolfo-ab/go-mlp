@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"gonum.org/v1/gonum/floats"
 	"gonum.org/v1/gonum/mat"
 	"math"
 	"math/rand"
@@ -49,6 +50,108 @@ func (nn *NeuralNetwork) initializeWeightsAndBiases() {
 	}
 }
 
+func (nn *NeuralNetwork) train(features, labels *mat.Dense) error {
+	nn.initializeWeightsAndBiases()
+
+	output := new(mat.Dense)
+
+	if err := nn.backpropagation(features, labels, output); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (nn *NeuralNetwork) backpropagation(features, labels, output *mat.Dense) error {
+	for i := 0; i < nn.config.numEpochs; i++ {
+		// Forward pass
+		hiddenLayerInput := new(mat.Dense)
+		hiddenLayerInput.Mul(features, nn.wHidden)
+		addBHidden := func(_, col int, v float64) float64 { return v + nn.bHidden.At(0, col) }
+		hiddenLayerInput.Apply(addBHidden, hiddenLayerInput)
+
+		hiddenLayerActivations := new(mat.Dense)
+		applyReLU := func(_, _ int, v float64) float64 { return relu(v) }
+		hiddenLayerActivations.Apply(applyReLU, hiddenLayerInput)
+
+		outputLayerInput := new(mat.Dense)
+		outputLayerInput.Mul(hiddenLayerActivations, nn.wOutput)
+		addBOut := func(_, col int, v float64) float64 { return v + nn.bOutput.At(0, col) }
+		outputLayerInput.Apply(addBOut, outputLayerInput)
+		output.Apply(applyReLU, outputLayerInput)
+
+		// Backpropagation
+		networkError := new(mat.Dense)
+		networkError.Sub(labels, output)
+
+		slopeOutputLayer := new(mat.Dense)
+		applyReLUDerivative := func(_, _ int, v float64) float64 { return reluDerivative(v) }
+		slopeOutputLayer.Apply(applyReLUDerivative, output)
+		slopeHiddenLayer := new(mat.Dense)
+		slopeHiddenLayer.Apply(applyReLUDerivative, hiddenLayerActivations)
+
+		dOutput := new(mat.Dense)
+		dOutput.MulElem(networkError, slopeOutputLayer)
+		errorAtHiddenLayer := new(mat.Dense)
+		errorAtHiddenLayer.Mul(dOutput, nn.wOutput.T())
+
+		dHiddenLayer := new(mat.Dense)
+		dHiddenLayer.MulElem(errorAtHiddenLayer, slopeHiddenLayer)
+
+		// Adjust parameters
+		wOutAdjusted := new(mat.Dense)
+		wOutAdjusted.Mul(hiddenLayerActivations.T(), dOutput)
+		wOutAdjusted.Scale(nn.config.learningRate, wOutAdjusted)
+		nn.wOutput.Add(nn.wOutput, wOutAdjusted)
+
+		bOutAdjusted, err := sumAlongAxis(0, dOutput)
+		if err != nil {
+			return err
+		}
+		bOutAdjusted.Scale(nn.config.learningRate, bOutAdjusted)
+		nn.bOutput.Add(nn.bOutput, bOutAdjusted)
+
+		wHiddenAdjusted := new(mat.Dense)
+		wHiddenAdjusted.Mul(features.T(), dHiddenLayer)
+		wHiddenAdjusted.Scale(nn.config.learningRate, wHiddenAdjusted)
+		wHiddenAdjusted.Add(nn.wHidden, wHiddenAdjusted)
+
+		bHiddenAdjusted, err := sumAlongAxis(0, dHiddenLayer)
+		if err != nil {
+			return err
+		}
+		bHiddenAdjusted.Scale(nn.config.learningRate, bHiddenAdjusted)
+		bHiddenAdjusted.Add(nn.bHidden, bHiddenAdjusted)
+	}
+	return nil
+}
+
+func sumAlongAxis(axis int, m *mat.Dense) (*mat.Dense, error) {
+	numRows, numCols := m.Dims()
+	var output *mat.Dense
+
+	switch axis {
+	case 0:
+		data := make([]float64, numCols)
+		for i := 0; i < numCols; i++ {
+			col := mat.Col(nil, i, m)
+			data[i] = floats.Sum(col)
+		}
+		output = mat.NewDense(1, numCols, data)
+	case 1:
+		data := make([]float64, numRows)
+		for i := 0; i < numRows; i++ {
+			row := mat.Row(nil, i, m)
+			data[i] = floats.Sum(row)
+		}
+		output = mat.NewDense(numRows, 1, data)
+	default:
+		return nil, errors.New("Invalid axis, must be 0 or 1.")
+	}
+
+	return output, nil
+}
+
 func relu(x float64) float64 {
 	return math.Max(0, x)
 }
@@ -74,7 +177,7 @@ func softmax(x []float64) []float64 {
 	return out
 }
 
-func (nn *NeuralNetwork) forwardPass(input *mat.Dense, yTrue *mat.Dense) (*mat.Dense, float64, error) {
+func (nn *NeuralNetwork) forwardPass(input *mat.Dense) (*mat.Dense, error) {
 	// Compute the input to the hidden layer
 	hiddenInput := mat.NewDense(input.RawMatrix().Rows, nn.config.numHiddenNeurons, nil)
 	hiddenInput.Mul(input, nn.wHidden)
@@ -90,18 +193,12 @@ func (nn *NeuralNetwork) forwardPass(input *mat.Dense, yTrue *mat.Dense) (*mat.D
 	finalInput.Add(finalInput, nn.bOutput)
 
 	// Apply the softmax activation function to the output of the output layer
-	finalOutput := applySoftmaxToDense(finalInput)
+	finalOutput := applySoftmax(finalInput)
 
-	// Calculate the cross-entropy loss
-	loss, err := crossEntropyLoss(yTrue, finalOutput)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return finalOutput, loss, nil
+	return finalOutput, nil
 }
 
-func applySoftmaxToDense(input *mat.Dense) *mat.Dense {
+func applySoftmax(input *mat.Dense) *mat.Dense {
 	r, c := input.Dims()
 	output := mat.NewDense(r, c, nil)
 
@@ -123,30 +220,4 @@ func applyFunc(input, output *mat.Dense, f func(float64) float64) {
 			output.Set(i, j, f(input.At(i, j)))
 		}
 	}
-}
-
-func crossEntropyLoss(yTrue *mat.Dense, yPred *mat.Dense) (float64, error) {
-	if yTrue.Dims() != yPred.Dims() {
-		return 0, errors.New("Dimensions of yTrue and yPred do not match")
-	}
-
-	r, c := yTrue.Dims()
-	totalLoss := 0.0
-
-	for i := 0; i < r; i++ {
-		for j := 0; j < c; j++ {
-			trueVal := yTrue.At(i, j)
-			predVal := yPred.At(i, j)
-
-			// Clip the predicted value to avoid log(0)
-			predVal = math.Max(1e-10, math.Min(1-1e-10, predVal))
-
-			// If trueVal is zero, ignore this term
-			if trueVal != 0 {
-				totalLoss += trueVal * math.Log(predVal)
-			}
-		}
-	}
-
-	return -totalLoss, nil
 }
