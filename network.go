@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"gonum.org/v1/gonum/mat"
 	"math"
 	"math/rand"
@@ -116,4 +117,30 @@ func applyFunc(input, output *mat.Dense, f func(float64) float64) {
 			output.Set(i, j, f(input.At(i, j)))
 		}
 	}
+}
+
+func crossEntropyLoss(yTrue *mat.Dense, yPred *mat.Dense) (float64, error) {
+	if yTrue.Dims() != yPred.Dims() {
+		return 0, errors.New("Dimensions of yTrue and yPred do not match")
+	}
+
+	r, c := yTrue.Dims()
+	totalLoss := 0.0
+
+	for i := 0; i < r; i++ {
+		for j := 0; j < c; j++ {
+			trueVal := yTrue.At(i, j)
+			predVal := yPred.At(i, j)
+
+			// Clip the predicted value to avoid log(0)
+			predVal = math.Max(1e-10, math.Min(1-1e-10, predVal))
+
+			// If trueVal is zero, ignore this term
+			if trueVal != 0 {
+				totalLoss += trueVal * math.Log(predVal)
+			}
+		}
+	}
+
+	return -totalLoss, nil
 }
