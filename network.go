@@ -74,7 +74,7 @@ func softmax(x []float64) []float64 {
 	return out
 }
 
-func (nn *NeuralNetwork) forwardPass(input *mat.Dense) (*mat.Dense, error) {
+func (nn *NeuralNetwork) forwardPass(input *mat.Dense, yTrue *mat.Dense) (*mat.Dense, float64, error) {
 	// Compute the input to the hidden layer
 	hiddenInput := mat.NewDense(input.RawMatrix().Rows, nn.config.numHiddenNeurons, nil)
 	hiddenInput.Mul(input, nn.wHidden)
@@ -92,7 +92,13 @@ func (nn *NeuralNetwork) forwardPass(input *mat.Dense) (*mat.Dense, error) {
 	// Apply the softmax activation function to the output of the output layer
 	finalOutput := applySoftmaxToDense(finalInput)
 
-	return finalOutput, nil
+	// Calculate the cross-entropy loss
+	loss, err := crossEntropyLoss(yTrue, finalOutput)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return finalOutput, loss, nil
 }
 
 func applySoftmaxToDense(input *mat.Dense) *mat.Dense {
