@@ -39,20 +39,26 @@ func (nn *NeuralNetwork) initializeWeightsAndBiases() {
 	randSource := rand.NewSource(time.Now().UnixNano())
 	randGen := rand.New(randSource)
 
-	wHiddenRaw := nn.wHidden.RawMatrix().Data
-	bHiddenRaw := nn.bHidden.RawMatrix().Data
-	wOutputRaw := nn.wOutput.RawMatrix().Data
-	bOutputRaw := nn.bOutput.RawMatrix().Data
-	for _, value := range [][]float64{wHiddenRaw, bHiddenRaw, wOutputRaw, bOutputRaw} {
-		for i := range value {
-			value[i] = randGen.Float64()
-		}
+	limitHidden := math.Sqrt(6.0 / float64(nn.config.numInputNeurons+nn.config.numHiddenNeurons))
+	for i := range nn.wHidden.RawMatrix().Data {
+		nn.wHidden.RawMatrix().Data[i] = randGen.Float64()*2*limitHidden - limitHidden // Scale and shift to [-limit, limit]
+	}
+
+	for i := range nn.bHidden.RawMatrix().Data {
+		nn.bHidden.RawMatrix().Data[i] = 0.01
+	}
+
+	limitOutput := math.Sqrt(6.0 / float64(nn.config.numHiddenNeurons+nn.config.numOutputNeurons))
+	for i := range nn.wOutput.RawMatrix().Data {
+		nn.wOutput.RawMatrix().Data[i] = randGen.Float64()*2*limitOutput - limitOutput // Scale and shift to [-limit, limit]
+	}
+
+	for i := range nn.bOutput.RawMatrix().Data {
+		nn.bOutput.RawMatrix().Data[i] = 0.01
 	}
 }
 
 func (nn *NeuralNetwork) train(features, labels *mat.Dense) error {
-	nn.initializeWeightsAndBiases()
-
 	output := new(mat.Dense)
 
 	if err := nn.backpropagation(features, labels, output); err != nil {
@@ -78,7 +84,7 @@ func (nn *NeuralNetwork) backpropagation(features, labels, output *mat.Dense) er
 		outputLayerInput.Mul(hiddenLayerActivations, nn.wOutput)
 		addBOut := func(_, col int, v float64) float64 { return v + nn.bOutput.At(0, col) }
 		outputLayerInput.Apply(addBOut, outputLayerInput)
-		output.Apply(applyReLU, outputLayerInput)
+		output = softmax(outputLayerInput)
 
 		// Backpropagation
 		networkError := new(mat.Dense)
@@ -114,14 +120,14 @@ func (nn *NeuralNetwork) backpropagation(features, labels, output *mat.Dense) er
 		wHiddenAdjusted := new(mat.Dense)
 		wHiddenAdjusted.Mul(features.T(), dHiddenLayer)
 		wHiddenAdjusted.Scale(nn.config.learningRate, wHiddenAdjusted)
-		wHiddenAdjusted.Add(nn.wHidden, wHiddenAdjusted)
+		nn.wHidden.Add(nn.wHidden, wHiddenAdjusted)
 
 		bHiddenAdjusted, err := sumAlongAxis(0, dHiddenLayer)
 		if err != nil {
 			return err
 		}
 		bHiddenAdjusted.Scale(nn.config.learningRate, bHiddenAdjusted)
-		bHiddenAdjusted.Add(nn.bHidden, bHiddenAdjusted)
+		nn.bHidden.Add(nn.bHidden, bHiddenAdjusted)
 	}
 	return nil
 }
@@ -163,61 +169,53 @@ func reluDerivative(x float64) float64 {
 	return 0
 }
 
-func softmax(x []float64) []float64 {
-	sumExp := 0.0
-	out := make([]float64, len(x))
-
-	for _, value := range x {
-		sumExp += math.Exp(value)
-	}
-
-	for i, value := range x {
-		out[i] = math.Exp(value) / sumExp
-	}
-	return out
-}
-
-func (nn *NeuralNetwork) forwardPass(input *mat.Dense) (*mat.Dense, error) {
-	// Compute the input to the hidden layer
-	hiddenInput := mat.NewDense(input.RawMatrix().Rows, nn.config.numHiddenNeurons, nil)
-	hiddenInput.Mul(input, nn.wHidden)
-	hiddenInput.Add(hiddenInput, nn.bHidden)
-
-	// Apply the ReLU activation function to the output of the hidden layer
-	hiddenOutput := mat.NewDense(hiddenInput.RawMatrix().Rows, nn.config.numHiddenNeurons, nil)
-	applyFunc(hiddenInput, hiddenOutput, relu)
-
-	// Compute the input to the output layer
-	finalInput := mat.NewDense(hiddenOutput.RawMatrix().Rows, nn.config.numOutputNeurons, nil)
-	finalInput.Mul(hiddenOutput, nn.wOutput)
-	finalInput.Add(finalInput, nn.bOutput)
-
-	// Apply the softmax activation function to the output of the output layer
-	finalOutput := applySoftmax(finalInput)
-
-	return finalOutput, nil
-}
-
-func applySoftmax(input *mat.Dense) *mat.Dense {
-	r, c := input.Dims()
-	output := mat.NewDense(r, c, nil)
+func softmax(x *mat.Dense) *mat.Dense {
+	r, c := x.Dims()
+	result := mat.NewDense(r, c, nil)
 
 	for i := 0; i < r; i++ {
-		row := mat.Row(nil, i, input)
-		softmaxRow := softmax(row)
-		for j, prob := range softmaxRow {
-			output.Set(i, j, prob)
+		row := mat.Row(nil, i, x)
+		max := floats.Max(row)
+		sum := 0.0
+
+		for j := range row {
+			row[j] = math.Exp(row[j] - max) // Improve numerical stability
+			sum += row[j]
 		}
+
+		for j := range row {
+			row[j] /= sum
+		}
+
+		result.SetRow(i, row)
 	}
 
-	return output
+	return result
 }
 
-func applyFunc(input, output *mat.Dense, f func(float64) float64) {
-	r, c := input.Dims()
-	for i := 0; i < r; i++ {
-		for j := 0; j < c; j++ {
-			output.Set(i, j, f(input.At(i, j)))
-		}
+func (nn *NeuralNetwork) predict(features *mat.Dense) (*mat.Dense, error) {
+	if nn.wHidden == nil || nn.wOutput == nil || nn.bHidden == nil || nn.bOutput == nil {
+		return nil, errors.New("The neural network has not been initialized.")
 	}
+
+	output := new(mat.Dense)
+
+	// Forward pass
+	hiddenLayerInput := new(mat.Dense)
+	hiddenLayerInput.Mul(features, nn.wHidden)
+	addBHidden := func(_, col int, v float64) float64 { return v + nn.bHidden.At(0, col) }
+	hiddenLayerInput.Apply(addBHidden, hiddenLayerInput)
+
+	hiddenLayerActivations := new(mat.Dense)
+	applyReLU := func(_, _ int, v float64) float64 { return relu(v) }
+	hiddenLayerActivations.Apply(applyReLU, hiddenLayerInput)
+
+	outputLayerInput := new(mat.Dense)
+	outputLayerInput.Mul(hiddenLayerActivations, nn.wOutput)
+	addBOut := func(_, col int, v float64) float64 { return v + nn.bOutput.At(0, col) }
+	outputLayerInput.Apply(addBOut, outputLayerInput)
+	output = softmax(outputLayerInput) // Use softmax for output activation
+
+	return output, nil
+
 }
